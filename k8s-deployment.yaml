@@ -1,0 +1,130 @@
+# Persistent Volume Claim for MySQL data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pv-claim
+  labels:
+    app: mysql
+spec:
+  accessModes:
+    - ReadWriteOnce # This means the volume can be mounted as read-write by a single node.
+  resources:
+    requests:
+      storage: 5Gi # Request 5 GB of storage for MySQL data. Adjust as needed.
+---
+# Service for MySQL database
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-service # This name will be used by the web container to connect to MySQL
+  labels:
+    app: mysql
+spec:
+  selector:
+    app: mysql # Selects pods with the label app: mysql
+  ports:
+    - protocol: TCP
+      port: 3306 # Service port
+      targetPort: 3306 # Container port
+  clusterIP: None # headless service for direct pod access or specific DNS behavior
+---
+# Deployment for MySQL database
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-deployment
+  labels:
+    app: mysql
+spec:
+  replicas: 1 # We need one MySQL instance
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql-db # Name of the MySQL container
+          image: mariadb:10.11 # Use the MariaDB version you specified
+          env: # Environment variables for MySQL setup
+            - name: MYSQL_DATABASE
+              value: "monika-db" # Your specified database name
+            - name: MYSQL_ROOT_PASSWORD
+              value: "Hello@123" # Your specified root password (use K8s Secrets in production!)
+          ports:
+            - containerPort: 3306 # MySQL default port
+          volumeMounts: # Mount the persistent volume for data
+            - name: mysql-persistent-storage
+              mountPath: /var/lib/mysql # Default data directory for MariaDB
+      volumes:
+        - name: mysql-persistent-storage
+          persistentVolumeClaim:
+            claimName: mysql-pv-claim # Link to the PVC defined above
+---
+# Service for Laravel Web Server
+apiVersion: v1
+kind: Service
+metadata:
+  name: laravel-web-service # Service name for accessing the web server
+  labels:
+    app: laravel-app
+spec:
+  selector:
+    app: laravel-app # Selects pods with the label app: laravel-app
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80 # External port for web access (e.g., http://your-ip:80)
+      targetPort: 8080 # Internal container port where Nginx listens
+    - name: ssh
+      protocol: TCP
+      port: 2222 # External port for SSH access (avoiding common 22, e.g., ssh -p 2222 user@ip)
+      targetPort: 22 # Internal container port for SSH daemon
+  type: LoadBalancer # Use LoadBalancer for cloud deployments (AWS, GCP, Azure)
+                     # For local development (e.g., Minikube), use NodePort instead:
+                     # type: NodePort
+---
+# Deployment for Laravel Web Server
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: laravel-web-deployment
+  labels:
+    app: laravel-app
+spec:
+  replicas: 1 # One replica of your web server pod
+  selector:
+    matchLabels:
+      app: laravel-app
+  template:
+    metadata:
+      labels:
+        app: laravel-app
+    spec:
+      containers:
+        - name: web-server # Name of the web server container
+          image: your-github-username/custom-php-nginx-ssh-git:latest # IMPORTANT: Replace with your built Docker image name
+          ports:
+            - containerPort: 8080 # Nginx port
+            - containerPort: 22   # SSH port
+          env: # Environment variables that Laravel will use (e.g., in .env)
+            - name: APP_ENV
+              value: "local" # Set to 'local' for development/debugging
+            - name: APP_DEBUG
+              value: "true"
+            - name: DB_CONNECTION
+              value: "mysql"
+            - name: DB_HOST
+              value: "mysql-service" # This matches the MySQL Service name
+            - name: DB_PORT
+              value: "3306"
+            - name: DB_DATABASE
+              value: "monika-db"
+            - name: DB_USERNAME
+              value: "root"
+            - name: DB_PASSWORD
+               value: "Hello@123" # Again, use K8s Secrets in production!
+            - name: APP_URL
+              value: "http://localhost:8080" # Internal URL for Laravel itself
